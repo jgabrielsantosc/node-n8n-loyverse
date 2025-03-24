@@ -14,14 +14,12 @@ import {
 } from "n8n-workflow";
 
 interface IOperationData {
-  request: {
-    method: IHttpRequestMethods;
-    url: string;
-  };
+  method: IHttpRequestMethods;
+  url: string;
 }
 
 interface IOperations {
-  [key: string]: IOperationData;
+  request: IOperationData;
 }
 
 interface INodeOption extends INodePropertyOptions {
@@ -63,7 +61,7 @@ export class Loyverse implements INodeType {
             routing: {
               request: {
                 method: "GET",
-                url: "=/v1.0/receipts",
+                url: "https://api.loyverse.com/v1.0/receipts",
               },
             },
           },
@@ -74,7 +72,7 @@ export class Loyverse implements INodeType {
             routing: {
               request: {
                 method: "GET",
-                url: "=/v1.0/receipts/{{$parameter.receipt_number}}",
+                url: "https://api.loyverse.com/v1.0/receipts/{{$parameter.receipt_number}}",
               },
             },
           },
@@ -85,7 +83,7 @@ export class Loyverse implements INodeType {
             routing: {
               request: {
                 method: "POST",
-                url: "=/v1.0/receipts",
+                url: "https://api.loyverse.com/v1.0/receipts",
               },
             },
           },
@@ -96,7 +94,7 @@ export class Loyverse implements INodeType {
             routing: {
               request: {
                 method: "POST",
-                url: "=/v1.0/receipts/{{$parameter.receipt_number}}/refund",
+                url: "https://api.loyverse.com/v1.0/receipts/{{$parameter.receipt_number}}/refund",
               },
             },
           },
@@ -292,62 +290,66 @@ export class Loyverse implements INodeType {
 
     for (let i = 0; i < items.length; i++) {
       try {
-        const options: IHttpRequestOptions = {
-          url: "https://api.loyverse.com",
-          headers: {
-            Authorization: `Bearer ${await this.getCredentials("loyverseApi")}`,
-          },
-        };
-
-        let responseData: IDataObject | IDataObject[] | undefined;
-
-        // Obtém o nó atual
         const node = this.getNode();
-
-        // Encontra a propriedade de operação nas propriedades do nó
         const operationProperty = (
           node as unknown as Loyverse
         ).description.properties.find(
           (property: INodeProperties) => property.name === "operation"
-        ) as INodeProperties & { options?: INodeOption[] };
+        );
 
-        // Obtém os dados da operação selecionada
-        const operationData = operationProperty?.options?.find(
-          (option: INodeOption) => option.value === operation
-        )?.routing?.[operation];
+        const operationOption = (operationProperty?.options || []).find(
+          (option) => (option as INodeOption).value === operation
+        ) as INodeOption;
 
-        if (operationData) {
-          const response =
-            await this.helpers.httpRequestWithAuthentication.call(
-              this,
-              "loyverseApi",
-              {
-                ...options,
-                ...operationData.request,
-                url: options.url + operationData.request.url,
-              }
-            );
+        const request = operationOption?.routing?.request;
+        const requestOptions: IHttpRequestOptions = {
+          url: request?.url || "",
+          method: request?.method || "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${await this.getCredentials("loyverseApi")}`,
+          },
+        };
 
-          if (response) {
-            responseData = response as IDataObject | IDataObject[];
+        if (operation === "create") {
+          const body: IDataObject = {
+            store_id: this.getNodeParameter("store_id", i),
+            customer_id: this.getNodeParameter("customer_id", i),
+            receipt_date: this.getNodeParameter("receipt_date", i),
+            note: this.getNodeParameter("note", i),
+            source: this.getNodeParameter("source", i),
+          };
+
+          const lineItems = this.getNodeParameter(
+            "line_items",
+            i
+          ) as IDataObject;
+          if (lineItems.lineItemValues) {
+            body.line_items = lineItems.lineItemValues;
           }
+
+          const payments = this.getNodeParameter("payments", i) as IDataObject;
+          if (payments.paymentValues) {
+            body.payments = payments.paymentValues;
+          }
+
+          requestOptions.body = body;
         }
+
+        const response = await this.helpers.httpRequest(requestOptions);
+        const responseData = response as IDataObject;
 
         if (Array.isArray(responseData)) {
           returnData.push(
             ...responseData.map((item) => ({ json: item as IDataObject }))
           );
-        } else if (responseData !== undefined) {
-          returnData.push({ json: responseData as IDataObject });
+        } else {
+          returnData.push({ json: responseData });
         }
       } catch (error) {
-        if (this.continueOnFail()) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Unknown error occurred";
-          returnData.push({ json: { error: errorMessage } });
-          continue;
-        }
-        throw error;
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error occurred";
+        throw new NodeOperationError(this.getNode(), errorMessage);
       }
     }
 
