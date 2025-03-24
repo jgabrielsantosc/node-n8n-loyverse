@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+.vscode
+node_modules
+src
+.eslintrc.js
+.eslintrc.prepublish.js
+.prettierrc
+tsconfig.json
+gulpfile.js
+*.log 
